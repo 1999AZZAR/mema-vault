@@ -24,13 +24,30 @@ Fetch a credential. By default, the password is masked in output.
 - **Show Raw**: Use `--show` flag only when required for secure injection.
 
 ### 3. List Credentials
-- **Usage**: `python3 scripts/vault.py list`
+- **Usage**: `python3 scripts/vault.py list` / `python3 scripts/vault.py list --json`
+- Shows `age` and warns when `>90d` (override with `--warn-days N`). `--json` for agents.
 
 ### 4. Delete a Credential
 Remove a credential permanently from the vault.
 - **Usage**: `python3 scripts/vault.py delete <service>`
 
-### 5. Rotate the Master Key
+### 5. Verify Vault
+Check master key + salt without exposing secrets.
+- **Usage**: `python3 scripts/vault.py verify`
+
+### 6. Run with Secret as Env Var
+Inject a secret as an env var for one command, never prints it.
+- **Usage**: `python3 scripts/vault.py env <service> [--env VAR_NAME] -- <cmd> [args...]`
+- Example: `python3 scripts/vault.py env openai -- python3 my_agent.py` (var defaults to `OPENAI`)
+- Example: `python3 scripts/vault.py env github --env GH_TOKEN -- gh auth login`
+
+### 7. Export / Import (encrypted, portable)
+Single encrypted blob (Fernet with PBKDF2 + fixed export salt, `0600`). Same master key decrypts it.
+- **Export**: `python3 scripts/vault.py export --out /tmp/vault.enc`
+- **Import merge**: `python3 scripts/vault.py import --in /tmp/vault.enc --mode merge`
+- **Import replace**: `python3 scripts/vault.py import --in /tmp/vault.enc --mode replace`
+
+### 8. Rotate the Master Key
 - **Interactive**: `python3 scripts/vault.py rotate-key`
 - **Agent Automation**: Set the old key in `MEMA_VAULT_MASTER_KEY` and the new key in `MEMA_VAULT_NEW_MASTER_KEY`.
 - **Stdin Automation**: Send the new key through stdin with `--new-key-stdin`.

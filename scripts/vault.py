@@ -2,9 +2,11 @@
 import argparse
 import base64
 import getpass
+import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -18,6 +20,8 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = Path(os.environ.get("MEMA_VAULT_DB_PATH", BASE_DIR / "data" / "vault.db"))
 SALT_PATH = Path(os.environ.get("MEMA_VAULT_SALT_PATH", BASE_DIR / "data" / "salt.bin"))
+EXPORT_SALT = b"mema-vault-export-v1"
+WARN_DAYS = 90
 
 
 class VaultError(Exception):
@@ -63,6 +67,10 @@ def get_fernet(master_key=None):
     return derive_fernet(master_key or get_master_key(), salt)
 
 
+def get_export_fernet(master_key=None):
+    return derive_fernet(master_key or get_master_key(), EXPORT_SALT)
+
+
 def connect():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     DB_PATH.parent.chmod(0o700)
@@ -89,6 +97,15 @@ def init_db():
             "id INTEGER PRIMARY KEY, service TEXT UNIQUE, username TEXT, "
             "encrypted_password TEXT, meta TEXT)"
         )
+        cols = {row[1] for row in connection.execute("PRAGMA table_info(credentials)")}
+        if "updated_at" not in cols:
+            connection.execute("ALTER TABLE credentials ADD COLUMN updated_at TEXT")
+        if "created_at" not in cols:
+            connection.execute("ALTER TABLE credentials ADD COLUMN created_at TEXT")
+
+
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat()
 
 
 def validate_key(connection, fernet):
@@ -113,13 +130,14 @@ def read_secret(prompt, from_stdin=False):
 
 def set_credential(service, username, password, meta=""):
     encrypted = get_fernet().encrypt(password.encode()).decode()
+    now = _now_iso()
     with database() as connection:
         connection.execute(
-            "INSERT INTO credentials (service, username, encrypted_password, meta) "
-            "VALUES (?, ?, ?, ?) ON CONFLICT(service) DO UPDATE SET "
+            "INSERT INTO credentials (service, username, encrypted_password, meta, updated_at, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(service) DO UPDATE SET "
             "username=excluded.username, encrypted_password=excluded.encrypted_password, "
-            "meta=excluded.meta",
-            (service, username, encrypted, meta),
+            "meta=excluded.meta, updated_at=excluded.updated_at",
+            (service, username, encrypted, meta, now, now),
         )
     print(f"Stored: {service}")
 
@@ -145,16 +163,44 @@ def get_credential(service, show=False):
     print(f"Meta: {row[3]}")
 
 
-def list_credentials():
+def list_credentials(json_output=False, warn_days=WARN_DAYS):
     fernet = get_fernet()
     with database() as connection:
         validate_key(connection, fernet)
         rows = connection.execute(
-            "SELECT service, username FROM credentials ORDER BY service"
+            "SELECT service, username, updated_at FROM credentials ORDER BY service"
         ).fetchall()
+    if json_output:
+        data = []
+        for service, username, updated_at in rows:
+            entry = {"service": service, "username": username}
+            if updated_at:
+                entry["updated_at"] = updated_at
+                try:
+                    dt = datetime.fromisoformat(updated_at)
+                    age_days = (datetime.now(timezone.utc) - dt).days
+                    entry["age_days"] = age_days
+                    if age_days > warn_days:
+                        entry["stale"] = True
+                except Exception:
+                    pass
+            data.append(entry)
+        print(json.dumps(data if data else [], indent=2))
+        return
     print("Vault Contents:")
-    for service, username in rows:
-        print(f"- {service} (User: {username})")
+    now = datetime.now(timezone.utc)
+    for service, username, updated_at in rows:
+        line = f"- {service} (User: {username})"
+        if updated_at:
+            try:
+                dt = datetime.fromisoformat(updated_at)
+                age = (now - dt).days
+                line += f"  updated {age}d ago"
+                if age > warn_days:
+                    line += f"  [warn: >{warn_days}d, consider rotation]"
+            except Exception:
+                pass
+        print(line)
 
 
 def delete_credential(service):
@@ -182,18 +228,126 @@ def rotate_master_key(new_key):
             rows = connection.execute(
                 "SELECT id, encrypted_password FROM credentials"
             ).fetchall()
+            now = _now_iso()
             updates = [
-                (new_fernet.encrypt(old_fernet.decrypt(token.encode())).decode(), row_id)
+                (new_fernet.encrypt(old_fernet.decrypt(token.encode())).decode(), now, row_id)
                 for row_id, token in rows
             ]
             connection.executemany(
-                "UPDATE credentials SET encrypted_password = ? WHERE id = ?", updates
+                "UPDATE credentials SET encrypted_password = ?, updated_at = ? WHERE id = ?", updates
             )
     except Exception:
         shutil.copy2(backup_path, DB_PATH)
         DB_PATH.chmod(0o600)
         raise
     print(f"Rotated {len(rows)} credentials. Backup: {backup_path}")
+
+
+def verify_vault():
+    fernet = get_fernet()
+    with database() as connection:
+        validate_key(connection, fernet)
+        count = connection.execute("SELECT count(*) FROM credentials").fetchone()[0]
+    print(f"OK: master key valid, {count} credential(s), salt OK")
+    return 0
+
+
+def env_exec(service, env_var, command):
+    if not command:
+        raise VaultError("env: no command provided after --")
+    if command[0] == "--":
+        command = command[1:]
+    if not command:
+        raise VaultError("env: no command provided after --")
+    with database() as connection:
+        row = connection.execute(
+            "SELECT encrypted_password FROM credentials WHERE service = ?", (service,)
+        ).fetchone()
+    if not row:
+        raise VaultError(f"credential not found: {service}")
+    password = get_fernet().decrypt(row[0].encode()).decode()
+    var_name = env_var
+    if not var_name:
+        var_name = service.upper().replace("-", "_").replace(" ", "_").replace("/", "_")
+        var_name = "".join(c if c.isalnum() or c == "_" else "_" for c in var_name)
+        if not var_name or var_name[0].isdigit():
+            var_name = f"SVC_{var_name}"
+    env = os.environ.copy()
+    env[var_name] = password
+    result = subprocess.run(command, env=env)
+    sys.exit(result.returncode)
+
+
+def export_vault(out_path, fmt="enc"):
+    fernet = get_fernet()
+    export_fernet = get_export_fernet()
+    with database() as connection:
+        validate_key(connection, fernet)
+        rows = connection.execute(
+            "SELECT service, username, encrypted_password, meta, updated_at, created_at FROM credentials ORDER BY service"
+        ).fetchall()
+    creds = []
+    for service, username, enc, meta, updated_at, created_at in rows:
+        password = fernet.decrypt(enc.encode()).decode()
+        creds.append(
+            {
+                "service": service,
+                "username": username,
+                "password": password,
+                "meta": meta or "",
+                "updated_at": updated_at,
+                "created_at": created_at,
+            }
+        )
+    payload = json.dumps(
+        {"version": 1, "exported_at": _now_iso(), "credentials": creds}, ensure_ascii=False
+    ).encode()
+    token = export_fernet.encrypt(payload)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_bytes(token)
+    out_path.chmod(0o600)
+    print(f"Exported {len(creds)} credential(s) to {out_path} (encrypted, 0600)")
+
+
+def import_vault(in_path, mode="merge"):
+    in_path = Path(in_path)
+    if not in_path.is_file():
+        raise VaultError(f"import file not found: {in_path}")
+    export_fernet = get_export_fernet()
+    local_fernet = get_fernet()
+    token = in_path.read_bytes().strip()
+    try:
+        payload = export_fernet.decrypt(token)
+    except InvalidToken:
+        raise VaultError("invalid master key for import file or corrupted file")
+    data = json.loads(payload.decode())
+    creds = data.get("credentials", [])
+    if not isinstance(creds, list):
+        raise VaultError("invalid import file format")
+    with database() as connection:
+        if mode == "replace":
+            connection.execute("DELETE FROM credentials")
+        count = 0
+        for c in creds:
+            service = c.get("service")
+            username = c.get("username", "")
+            password = c.get("password")
+            meta = c.get("meta", "")
+            updated_at = c.get("updated_at") or _now_iso()
+            created_at = c.get("created_at") or updated_at
+            if not service or password is None:
+                continue
+            enc = local_fernet.encrypt(password.encode()).decode()
+            connection.execute(
+                "INSERT INTO credentials (service, username, encrypted_password, meta, updated_at, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(service) DO UPDATE SET "
+                "username=excluded.username, encrypted_password=excluded.encrypted_password, "
+                "meta=excluded.meta, updated_at=excluded.updated_at",
+                (service, username, enc, meta, updated_at, created_at),
+            )
+            count += 1
+    print(f"Imported {count} credential(s) from {in_path} (mode={mode})")
 
 
 def build_parser():
@@ -210,13 +364,31 @@ def build_parser():
     get_parser.add_argument("service")
     get_parser.add_argument("--show", action="store_true", help="show raw password")
 
-    subparsers.add_parser("list")
+    list_parser = subparsers.add_parser("list")
+    list_parser.add_argument("--json", action="store_true", help="output as JSON")
+    list_parser.add_argument("--warn-days", type=int, default=WARN_DAYS, help="stale threshold in days")
 
     delete_parser = subparsers.add_parser("delete")
     delete_parser.add_argument("service")
 
     rotate_parser = subparsers.add_parser("rotate-key")
     rotate_parser.add_argument("--new-key-stdin", action="store_true")
+
+    subparsers.add_parser("verify")
+
+    env_parser = subparsers.add_parser("env", help="run command with secret as env var")
+    env_parser.add_argument("service", help="service name to inject")
+    env_parser.add_argument("--env", dest="env_var", default=None, help="env var name (default: SERVICE uppercased)")
+    env_parser.add_argument("command", nargs=argparse.REMAINDER, help="command after --")
+
+    export_parser = subparsers.add_parser("export", help="export vault to encrypted file")
+    export_parser.add_argument("--out", required=True, type=Path, help="output file path")
+    export_parser.add_argument("--format", choices=["enc"], default="enc", help="export format")
+
+    import_parser = subparsers.add_parser("import", help="import vault from encrypted file")
+    import_parser.add_argument("--in", dest="input", required=True, type=Path, help="input file path")
+    import_parser.add_argument("--mode", choices=["merge", "replace"], default="merge", help="merge or replace")
+
     return parser
 
 
@@ -229,7 +401,7 @@ def main():
     elif args.command == "get":
         get_credential(args.service, args.show)
     elif args.command == "list":
-        list_credentials()
+        list_credentials(json_output=args.json, warn_days=args.warn_days)
     elif args.command == "delete":
         delete_credential(args.service)
     elif args.command == "rotate-key":
@@ -241,6 +413,14 @@ def main():
             if new_key != confirmation:
                 raise VaultError("new master keys do not match")
         rotate_master_key(new_key)
+    elif args.command == "verify":
+        verify_vault()
+    elif args.command == "env":
+        env_exec(args.service, args.env_var, args.command)
+    elif args.command == "export":
+        export_vault(args.out, args.format)
+    elif args.command == "import":
+        import_vault(args.input, args.mode)
 
 
 if __name__ == "__main__":
