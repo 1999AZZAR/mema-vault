@@ -59,4 +59,4 @@ Single encrypted blob (Fernet with PBKDF2 + fixed export salt, `0600`). Same mas
 - **Isolation**: The Master Key should never be stored in plaintext on disk.
 - **Compatibility**: `MASTER_KEY` remains a deprecated fallback for existing installations.
 - **Storage**: Override runtime paths with `MEMA_VAULT_DB_PATH` and `MEMA_VAULT_SALT_PATH` when packaging or sharing the skill.
-- **Packaging**: Use `python3 scripts/package_skill.py [output.skill]`; it excludes `.env`, databases, salts, backups, and project memory.
+- **Storage Safety**: `.gitignore` excludes `.env`, `*.db`, `*.bin`, and backups — safe to make the repo public.

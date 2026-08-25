@@ -25,4 +25,4 @@
 ## Data Exposure
 - Passwords are encrypted. Service names, usernames, and metadata remain plaintext in SQLite.
 - Do not package or share `.env`, `data/vault.db`, database backups, or runtime salt files.
-- Use `scripts/package_skill.py` instead of a generic directory packager; it packages an explicit allowlist only.
+- `.gitignore` excludes `.env`, databases, salts, and backups.

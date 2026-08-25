@@ -21,7 +21,6 @@ The vault does not send data over the network.
 - [Security boundaries](#security-boundaries)
 - [Backup and recovery](#backup-and-recovery)
 - [Tests](#tests)
-- [Package the skill](#package-the-skill)
 
 ## Requirements
 
@@ -231,13 +230,3 @@ python3 -m unittest discover -s tests -v
 ```
 
 The tests use temporary vaults. They do not read or modify `data/vault.db`.
-
-## Package the skill
-
-Use the allowlist packager:
-
-```bash
-python3 scripts/package_skill.py dist/mema-vault.skill
-```
-
-It excludes `.env`, vault databases, salts, rotation backups, and project memory. Do not package the directory with a generic archive command unless you inspect the archive contents first.

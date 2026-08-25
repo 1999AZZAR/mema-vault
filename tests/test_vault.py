@@ -5,7 +5,6 @@ import os
 import sqlite3
 import tempfile
 import unittest
-import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -19,13 +18,6 @@ if SPEC is None or SPEC.loader is None:
     raise RuntimeError(f"cannot load {VAULT_PATH}")
 vault = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(vault)
-
-PACKAGE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "package_skill.py"
-PACKAGE_SPEC = importlib.util.spec_from_file_location("package_skill", PACKAGE_PATH)
-if PACKAGE_SPEC is None or PACKAGE_SPEC.loader is None:
-    raise RuntimeError(f"cannot load {PACKAGE_PATH}")
-package_skill = importlib.util.module_from_spec(PACKAGE_SPEC)
-PACKAGE_SPEC.loader.exec_module(package_skill)
 
 
 class VaultTestCase(unittest.TestCase):
@@ -131,20 +123,6 @@ class VaultTestCase(unittest.TestCase):
         os.environ["MASTER_KEY"] = "legacy-key"
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(vault.get_master_key(), b"legacy-key")
-
-
-class PackageTestCase(unittest.TestCase):
-    def test_package_excludes_runtime_secrets(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output = Path(temp_dir) / "mema-vault.skill"
-            package_skill.package(output)
-            with zipfile.ZipFile(output) as archive:
-                names = set(archive.namelist())
-        self.assertIn("mema-vault/scripts/vault.py", names)
-        self.assertIn("mema-vault/README.md", names)
-        self.assertNotIn("mema-vault/.env", names)
-        self.assertNotIn("mema-vault/data/vault.db", names)
-        self.assertNotIn("mema-vault/data/salt.bin", names)
 
 
 if __name__ == "__main__":
