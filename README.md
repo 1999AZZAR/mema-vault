@@ -14,6 +14,9 @@ The vault does not send data over the network.
   - [Store or replace a credential](#store-or-replace-a-credential)
   - [Retrieve a credential](#retrieve-a-credential)
   - [List credentials](#list-credentials)
+  - [Verify vault](#verify-vault)
+  - [Run with secret as env var](#run-with-secret-as-env-var)
+  - [Export / Import](#export--import-encrypted-portable)
   - [Delete a credential](#delete-a-credential)
 - [Use cases](#use-cases)
 - [Rotate the master key](#rotate-the-master-key)
@@ -95,9 +98,40 @@ python3 scripts/vault.py get github --show
 
 ```bash
 python3 scripts/vault.py list
+python3 scripts/vault.py list --json
+python3 scripts/vault.py list --warn-days 30
 ```
 
-This prints service names and usernames. It does not print passwords.
+This prints service names and usernames. It does not print passwords. `list` shows `age` and warns when `>90d`. `--json` outputs machine-readable JSON for agents.
+
+### Verify vault
+
+```bash
+python3 scripts/vault.py verify
+```
+
+Checks master key + salt without exposing secrets. Useful for CI health checks.
+
+### Run with secret as env var
+
+Inject a secret as an env var for one command without printing it:
+
+```bash
+python3 scripts/vault.py env github --env GH_TOKEN -- gh auth login
+python3 scripts/vault.py env openai -- python3 my_agent.py
+```
+
+If `--env` is omitted, the var name defaults to the uppercased service name. This avoids `--show` leakage in logs.
+
+### Export / Import (encrypted, portable)
+
+```bash
+python3 scripts/vault.py export --out /tmp/vault.enc
+python3 scripts/vault.py import --in /tmp/vault.enc --mode merge
+python3 scripts/vault.py import --in /tmp/vault.enc --mode replace
+```
+
+`export` creates a single Fernet-encrypted blob (`0600`) using the same master key. `import --mode merge` upserts, `replace` wipes first.
 
 ### Delete a credential
 
@@ -111,12 +145,11 @@ Deletion is permanent unless the database has been backed up.
 
 ### 1. Agent that needs API keys at runtime
 
-The agent sets `MEMA_VAULT_MASTER_KEY` in its environment (never in code) and pulls secrets on demand. Passwords are decrypted only for the lifetime of the command and masked by default.
+The agent sets `MEMA_VAULT_MASTER_KEY` in its environment (never in code) and pulls secrets on demand. Passwords are decrypted only for the lifetime of the command and masked by default. Prefer `env` over `--show` to avoid log leakage.
 
 ```bash
-export MEMA_VAULT_MASTER_KEY="$MEMA_VAULT_MASTER_KEY"
-OPENAI_API_KEY="$(python3 scripts/vault.py get openai --show 2>/dev/null | awk '/^Pass: /{print substr($0,7)}')" \
-  python3 my_agent.py
+python3 scripts/vault.py env openai -- python3 my_agent.py
+python3 scripts/vault.py env github --env GH_TOKEN -- gh api user
 ```
 
 Use `--show` only when piping into another process. Avoid logging or echoing the value.
@@ -130,8 +163,7 @@ python3 scripts/vault.py set stripe alice --meta "test mode"
 python3 scripts/vault.py set resend alice --meta "transactional email"
 
 # run app with secrets from vault
-RESEND_API_KEY="$(python3 scripts/vault.py get resend --show 2>/dev/null | awk '/^Pass: /{print substr($0,7)}')" \
-  npm run dev
+python3 scripts/vault.py env resend --env RESEND_API_KEY -- npm run dev
 ```
 
 ### 3. Multi-machine sync (manual)
@@ -207,17 +239,20 @@ The CLI applies mode `0700` to runtime directories and `0600` to the database, s
 - Service names, usernames, and metadata are visible to anyone who can read the SQLite database.
 - The master key cannot be recovered from the database. Losing it makes the passwords unrecoverable.
 - A process with access to the master key and vault files can decrypt stored passwords.
+- `export` blobs are Fernet-encrypted with the same master key (fixed export salt, `0600`); same key is required to import.
 
 ## Backup and recovery
 
-Back up both files:
+Back up both files, or use an encrypted export:
 
 ```text
 data/vault.db
 data/salt.bin
+# or
+vault.enc  (from: python3 scripts/vault.py export --out vault.enc)
 ```
 
-Keep backups outside the repository with owner-only permissions. To restore, place the matching database and salt at the configured paths and use the master key that encrypted that database.
+Keep backups outside the repository with owner-only permissions. To restore, place the matching database and salt at the configured paths and use the master key that encrypted that database. For `vault.enc`, run `python3 scripts/vault.py import --in vault.enc --mode replace`.
 
 Before replacing a working vault, copy it to a separate directory. Do not overwrite the only known-good database during recovery.
 
