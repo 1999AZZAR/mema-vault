@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mema Vault"
+  short_description: "Secure credential manager for storing and rotating secrets."
+  default_prompt: "Store my AWS credentials securely."
