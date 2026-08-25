@@ -6,6 +6,23 @@ Mema Vault stores local credentials in SQLite. Passwords are encrypted with Fern
 
 The vault does not send data over the network.
 
+## Contents
+
+- [Requirements](#requirements)
+- [Master key access](#master-key-access)
+- [Usage](#usage)
+  - [Store or replace a credential](#store-or-replace-a-credential)
+  - [Retrieve a credential](#retrieve-a-credential)
+  - [List credentials](#list-credentials)
+  - [Delete a credential](#delete-a-credential)
+- [Use cases](#use-cases)
+- [Rotate the master key](#rotate-the-master-key)
+- [Storage paths](#storage-paths)
+- [Security boundaries](#security-boundaries)
+- [Backup and recovery](#backup-and-recovery)
+- [Tests](#tests)
+- [Package the skill](#package-the-skill)
+
 ## Requirements
 
 - Python 3.9 or newer
@@ -90,6 +107,55 @@ python3 scripts/vault.py delete github
 ```
 
 Deletion is permanent unless the database has been backed up.
+
+## Use cases
+
+### 1. Agent that needs API keys at runtime
+
+The agent sets `MEMA_VAULT_MASTER_KEY` in its environment (never in code) and pulls secrets on demand. Passwords are decrypted only for the lifetime of the command and masked by default.
+
+```bash
+export MEMA_VAULT_MASTER_KEY="$MEMA_VAULT_MASTER_KEY"
+OPENAI_API_KEY="$(python3 scripts/vault.py get openai --show 2>/dev/null | awk '/^Pass: /{print substr($0,7)}')" \
+  python3 my_agent.py
+```
+
+Use `--show` only when piping into another process. Avoid logging or echoing the value.
+
+### 2. Local dev without dotenv sprawl
+
+Instead of scattering `.env` files, keep all service tokens in one encrypted vault and inject them per command. No plaintext secrets on disk outside `vault.db`/`salt.bin` (both `0600`).
+
+```bash
+python3 scripts/vault.py set stripe alice --meta "test mode"
+python3 scripts/vault.py set resend alice --meta "transactional email"
+
+# run app with secrets from vault
+RESEND_API_KEY="$(python3 scripts/vault.py get resend --show 2>/dev/null | awk '/^Pass: /{print substr($0,7)}')" \
+  npm run dev
+```
+
+### 3. Multi-machine sync (manual)
+
+Vaults are local SQLite + salt files. To sync two machines, copy `data/vault.db` + `data/salt.bin` together (losing the salt makes passwords unrecoverable). If both machines have diverged, stage the other vault under `data/from-other/` and merge:
+
+```bash
+mkdir -p data/from-other
+cp /path/from-other-machine/vault.db data/from-other/vault.db
+cp /path/from-other-machine/salt.bin data/from-other/salt.bin
+python3 scripts/combine_vaults.py
+```
+
+The combiner re-encrypts `from-other` entries with the local salt. Copy the merged `vault.db` + `salt.bin` back to the other machine to converge.
+
+### 4. CI / ephemeral runners
+
+Store the master key as a CI secret, inject it as `MEMA_VAULT_MASTER_KEY`, and keep `vault.db`/`salt.bin` as encrypted artifacts or restore them from a backup. Rotate after exposure.
+
+```bash
+export MEMA_VAULT_MASTER_KEY="$CI_VAULT_MASTER_KEY"
+python3 scripts/vault.py list
+```
 
 ## Rotate the master key
 
