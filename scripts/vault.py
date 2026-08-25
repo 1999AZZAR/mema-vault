@@ -230,11 +230,16 @@ def rotate_master_key(new_key):
             ).fetchall()
             now = _now_iso()
             updates = [
-                (new_fernet.encrypt(old_fernet.decrypt(token.encode())).decode(), now, row_id)
+                (
+                    new_fernet.encrypt(old_fernet.decrypt(token.encode())).decode(),
+                    now,
+                    row_id,
+                )
                 for row_id, token in rows
             ]
             connection.executemany(
-                "UPDATE credentials SET encrypted_password = ?, updated_at = ? WHERE id = ?", updates
+                "UPDATE credentials SET encrypted_password = ?, updated_at = ? WHERE id = ?",
+                updates,
             )
     except Exception:
         shutil.copy2(backup_path, DB_PATH)
@@ -300,7 +305,8 @@ def export_vault(out_path, fmt="enc"):
             }
         )
     payload = json.dumps(
-        {"version": 1, "exported_at": _now_iso(), "credentials": creds}, ensure_ascii=False
+        {"version": 1, "exported_at": _now_iso(), "credentials": creds},
+        ensure_ascii=False,
     ).encode()
     token = export_fernet.encrypt(payload)
     out_path = Path(out_path)
@@ -366,7 +372,9 @@ def build_parser():
 
     list_parser = subparsers.add_parser("list")
     list_parser.add_argument("--json", action="store_true", help="output as JSON")
-    list_parser.add_argument("--warn-days", type=int, default=WARN_DAYS, help="stale threshold in days")
+    list_parser.add_argument(
+        "--warn-days", type=int, default=WARN_DAYS, help="stale threshold in days"
+    )
 
     delete_parser = subparsers.add_parser("delete")
     delete_parser.add_argument("service")
@@ -378,16 +386,35 @@ def build_parser():
 
     env_parser = subparsers.add_parser("env", help="run command with secret as env var")
     env_parser.add_argument("service", help="service name to inject")
-    env_parser.add_argument("--env", dest="env_var", default=None, help="env var name (default: SERVICE uppercased)")
-    env_parser.add_argument("command", nargs=argparse.REMAINDER, help="command after --")
+    env_parser.add_argument(
+        "--env",
+        dest="env_var",
+        default=None,
+        help="env var name (default: SERVICE uppercased)",
+    )
+    env_parser.add_argument(
+        "command", nargs=argparse.REMAINDER, help="command after --"
+    )
 
-    export_parser = subparsers.add_parser("export", help="export vault to encrypted file")
-    export_parser.add_argument("--out", required=True, type=Path, help="output file path")
-    export_parser.add_argument("--format", choices=["enc"], default="enc", help="export format")
+    export_parser = subparsers.add_parser(
+        "export", help="export vault to encrypted file"
+    )
+    export_parser.add_argument(
+        "--out", required=True, type=Path, help="output file path"
+    )
+    export_parser.add_argument(
+        "--format", choices=["enc"], default="enc", help="export format"
+    )
 
-    import_parser = subparsers.add_parser("import", help="import vault from encrypted file")
-    import_parser.add_argument("--in", dest="input", required=True, type=Path, help="input file path")
-    import_parser.add_argument("--mode", choices=["merge", "replace"], default="merge", help="merge or replace")
+    import_parser = subparsers.add_parser(
+        "import", help="import vault from encrypted file"
+    )
+    import_parser.add_argument(
+        "--in", dest="input", required=True, type=Path, help="input file path"
+    )
+    import_parser.add_argument(
+        "--mode", choices=["merge", "replace"], default="merge", help="merge or replace"
+    )
 
     return parser
 
