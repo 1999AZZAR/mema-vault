@@ -3,10 +3,16 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
+.pytype/
+.pyre/
 .ruff_cache/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
+.tox/
 *.egg-info/
+*.egg
 .venv/
 venv/
 env/
@@ -14,16 +20,29 @@ dist/
 build/
 *.skill
 
+# Logs / local test artifacts
+*.log
+
 # Vault runtime - never publish
 *.db
 *.db.*
 *.db-journal
 *.db-shm
 *.db-wal
+*.enc
+*.enc.*
+*.backup-*
+salt.bin
+*.salt
+*.bak
+*.orig
+*.rej
 data/*.bin
 data/**/*.bin
 data/*.db
 data/**/*.db
+data/*.enc
+data/**/*.enc
 data/from-other/*.bin
 
 # Secrets
@@ -36,13 +55,22 @@ data/from-other/*.bin
 *.pfx
 id_rsa*
 id_ed25519*
+secrets.yaml
+secrets.yml
+secrets.json
+credentials.json
+vault.enc
 
 # OS / IDE
 .DS_Store
 Thumbs.db
+ehthumbs.db
+Desktop.ini
+.Trash-*
 .vscode/
 .idea/
 *.swp
+*.swo
 *~
 
 # Project Guardian
@@ -51,3 +79,7 @@ memory.db-journal
 memory.db-shm
 memory.db-wal
 .mema/
+
+# Merge staging area - only the README is tracked, everything else ignored
+data/from-other/*
+!data/from-other/README.md
