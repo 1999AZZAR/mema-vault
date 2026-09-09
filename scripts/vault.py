@@ -876,7 +876,12 @@ def verify_vault():
 def env_exec(service, env_var, command):
     if not command:
         raise VaultError("env: no command provided after --")
-    if command[0] == "--":
+    if command and command[0] == "--env":
+        if len(command) < 2:
+            raise VaultError("env: --env requires an argument")
+        env_var = command[1]
+        command = command[2:]
+    if command and command[0] == "--":
         command = command[1:]
     if not command:
         raise VaultError("env: no command provided after --")
@@ -1114,7 +1119,7 @@ def build_parser():
         help="env var name (default: SERVICE uppercased)",
     )
     env_parser.add_argument(
-        "command", nargs=argparse.REMAINDER, help="command after --"
+        "cmd", metavar="command", nargs=argparse.REMAINDER, help="command after --"
     )
 
     export_parser = subparsers.add_parser(
@@ -1210,7 +1215,7 @@ def main():
     elif args.command == "types":
         print_types()
     elif args.command == "env":
-        env_exec(args.service, args.env_var, args.command)
+        env_exec(args.service, args.env_var, args.cmd)
     elif args.command == "export":
         export_vault(args.out, args.format)
     elif args.command == "import":

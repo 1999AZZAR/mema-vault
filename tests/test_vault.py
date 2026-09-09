@@ -124,6 +124,17 @@ class VaultTestCase(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(vault.get_master_key(), b"legacy-key")
 
+    def test_env_exec_injects_secret(self):
+        vault.set_credential("testsvc", "user", "supersecret")
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            with self.assertRaises(SystemExit) as cm:
+                vault.env_exec("testsvc", "CUSTOM_VAR", ["echo", "ok"])
+            self.assertEqual(cm.exception.code, 0)
+            mock_run.assert_called_once()
+            called_env = mock_run.call_args[1]["env"]
+            self.assertEqual(called_env.get("CUSTOM_VAR"), "supersecret")
+
 
 if __name__ == "__main__":
     unittest.main()
