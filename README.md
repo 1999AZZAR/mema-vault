@@ -90,9 +90,37 @@ Print the complete password only when another process requires it:
 
 ```bash
 python3 scripts/vault.py get github --show
+python3 scripts/vault.py get bca-card --json        # machine-readable, masked
+python3 scripts/vault.py get bca-card --json --show # machine-readable, raw
 ```
 
-`--show` writes the secret to standard output. Do not use it in shared terminals, logs, screenshots, or captured agent output.
+`--show` writes secrets to standard output. Do not use it in shared terminals, logs, screenshots, or captured agent output.
+
+### Typed records (card / address / note / apikey / generic)
+
+`set` stores classic logins. `store --kind` stores structured records with
+validation. List kinds with `python3 scripts/vault.py types`.
+
+```bash
+# credit/debit card (number Luhn-checked, expiry MM/YY, cvv 3-4 digits)
+python3 scripts/vault.py store bca --kind card \
+  --field cardholder="Azzar" --secret-field number \
+  --field expiry="08/28" --field cvv="123"
+
+# alamat (street + city required)
+python3 scripts/vault.py store rumah --kind address --fields-json \
+  '{"street":"Jl. Mawar 12","city":"Bandung","province":"Jawa Barat","postal":"40111","country":"ID","phone":"+62 812 0000 1111"}'
+
+# secure note / api key / free-form
+python3 scripts/vault.py store todo --kind note --field title="x" --field body="ingat bayar"
+printf '%s\n' "$TOKEN" | python3 scripts/vault.py store gh --kind apikey --password-stdin
+python3 scripts/vault.py store misc --kind generic --field k1=v1 --field k2=v2
+```
+
+`--secret-field NAME` reads a value via prompt/stdin so secrets never land in
+process args or shell history. `--field k=v` may repeat; `--fields-json`
+takes a JSON object. Card numbers print masked except the last 4 digits.
+`get`/`list --json` include the record `kind`; `list` shows `[kind]` per row.
 
 ### List credentials
 
@@ -235,8 +263,10 @@ The CLI applies mode `0700` to runtime directories and `0600` to the database, s
 
 - Fernet authenticates ciphertext and detects an incorrect key or modified credential.
 - PBKDF2HMAC-SHA256 uses 480,000 iterations and a random 16-byte salt.
-- Passwords are decrypted only while a command is running.
-- Service names, usernames, and metadata are visible to anyone who can read the SQLite database.
+- A `key_verifier` record makes a wrong master key fail even on an empty vault.
+- Passwords and typed fields are decrypted only while a command is running.
+- Service names, usernames, record kinds, and metadata are visible to anyone who can read the SQLite database. Only passwords + typed fields are encrypted.
+- Input is validated: service 1–128 chars, master key minimum 8 chars (12+ recommended), card Luhn + expiry + CVV checks, field size caps, import size caps.
 - The master key cannot be recovered from the database. Losing it makes the passwords unrecoverable.
 - A process with access to the master key and vault files can decrypt stored passwords.
 - `export` blobs are Fernet-encrypted with the same master key (fixed export salt, `0600`); same key is required to import.

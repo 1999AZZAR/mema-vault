@@ -19,9 +19,20 @@ Encrypt and save a new credential.
 - **Automation**: Send the secret through stdin with `--password-stdin`; never place secrets in command arguments.
 
 ### 2. Retrieve a Secret
-Fetch a credential. By default, the password is masked in output.
+Fetch a credential. By default, secrets are masked in output.
 - **Usage**: `python3 scripts/vault.py get <service>`
 - **Show Raw**: Use `--show` flag only when required for secure injection.
+- **JSON**: Use `--json` (agents) with optional `--show` for full field access.
+
+### 2b. Typed Records (card / address / note / apikey / generic)
+Store structured secrets with per-type validation (card numbers get a
+Luhn check, expiry must be `MM/YY`, CVV 3–4 digits, addresses require
+street + city). Card numbers display masked except last 4.
+- **Types**: `python3 scripts/vault.py types`
+- **Card**: `python3 scripts/vault.py store bca --kind card --field cardholder="Name" --secret-field number --field expiry="08/28" --field cvv="123"`
+- **Address (alamat)**: `python3 scripts/vault.py store rumah --kind address --fields-json '{"street":"Jl. Mawar 12","city":"Bandung","province":"Jawa Barat","postal":"40111","country":"ID"}'`
+- **Note / API key / generic**: `--kind note --field body="..."`, `--kind apikey --password-stdin`, `--kind generic --field k=v`
+- Prefer `--secret-field NAME` / `--password-stdin` over `--field` for secrets (keeps values out of process args / shell history).
 
 ### 3. List Credentials
 - **Usage**: `python3 scripts/vault.py list` / `python3 scripts/vault.py list --json`
